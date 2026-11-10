@@ -19,6 +19,15 @@ function vnDate(iso) { if (!iso) return ''; var d = new Date(new Date(iso).getTi
 function vnTime(iso) { if (!iso) return ''; var d = new Date(new Date(iso).getTime() + 7 * 3600000).toISOString(); return d.slice(11, 16) + ' ' + d.slice(8, 10) + '/' + d.slice(5, 7); }
 function dmy(s) { return s ? s.slice(8, 10) + '/' + s.slice(5, 7) + '/' + s.slice(0, 4) : ''; }
 function today() { return vnDate(new Date().toISOString()); }
+function vnFull(iso) { if (!iso) return ''; var d = new Date(new Date(iso).getTime() + 7 * 3600000).toISOString(); return d.slice(8, 10) + '/' + d.slice(5, 7) + '/' + d.slice(0, 4) + ' ' + d.slice(11, 19); }
+function dur(sec) { sec = Number(sec) || 0; var h = Math.floor(sec / 3600), m = Math.floor(sec % 3600 / 60), x = sec % 60; return (h ? h + ' giờ ' : '') + m + ' phút ' + x + ' giây'; }
+function mapLink(lat, lng, acc) { if (lat === '' || lat === null || lat === undefined) return ''; return '<a href="https://www.google.com/maps?q=' + encodeURIComponent(lat + ',' + lng) + '" target="_blank" rel="noopener">' + esc(Number(lat).toFixed(5) + ', ' + Number(lng).toFixed(5)) + '</a>' + (acc ? ' (±' + esc(acc) + ' m)' : ''); }
+// V1.2: bộ chọn kỳ dùng chung (tháng, quý, năm, toàn bộ thời gian)
+function periodPicker(per, ref, act) {
+  return '<div class="row"><select id="dPer" aria-label="Kỳ" style="width:auto" data-change="perChange"><option value="month"' + (per === 'month' ? ' selected' : '') + '>Tháng</option><option value="quarter"' + (per === 'quarter' ? ' selected' : '') + '>Quý</option><option value="year"' + (per === 'year' ? ' selected' : '') + '>Năm</option><option value="all"' + (per === 'all' ? ' selected' : '') + '>Toàn bộ thời gian</option></select>' +
+    '<input id="dRef" type="month" value="' + esc(ref) + '" aria-label="Tháng tham chiếu" style="width:auto"' + (per === 'all' ? ' hidden' : '') + '><button class="btn" data-act="' + act + '">Xem</button></div>';
+}
+function perVal() { var p = val('dPer') || 'month'; return [p, p === 'all' ? today().slice(0, 7) : (val('dRef') || today().slice(0, 7))]; }
 function toast(msg, kind) { var t = $('toast'); t.textContent = msg; t.className = 'toast ' + (kind || 'info'); t.hidden = false; clearTimeout(toast._t); toast._t = setTimeout(function () { t.hidden = true; }, 5000); }
 function load(k, d) { try { var v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch (e) { return d; } }
 function save(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch (e) { toast('Bộ nhớ thiết bị đầy, không lưu được dữ liệu chờ gửi.', 'err'); return false; } }
@@ -204,7 +213,8 @@ var PS = { DRAFT: 'Dự thảo', SUBMITTED: 'Chờ duyệt', APPROVED: 'Đã duy
 var IS = { NEW: 'Mới ghi nhận', RECEIVED: 'Đã tiếp nhận', IN_PROGRESS: 'Đang xử lý', RESOLVED: 'Đã xử lý', MONITORING: 'Tiếp tục theo dõi', CLOSED: 'Đóng hồ sơ', REOPENED: 'Mở lại' };
 var IG = { OPEN: ['Chưa xử lý', 'red'], HANDLING: ['Đang xử lý', 'amber'], DONE: ['Đã xử lý', 'green'], MONITORING: ['Tiếp tục theo dõi', 'blue'] };
 var SRC = { DINH_KY: 'Định kỳ', BAO_DUONG_BO_SUNG: 'Bảo dưỡng bổ sung', PHAT_SINH: 'Phát sinh' };
-var COLOR = { red: 'Quá hạn', amber: 'Đang thực hiện / sắp đến hạn', green: 'Đạt tiến độ', blue: 'Còn hạn', grey: 'Chưa đến kỳ' };
+var COLOR = { green: 'Hoàn thành / đạt tiến độ', amber: 'Đang thực hiện / có nguy cơ chậm', red: 'Quá hạn / chưa hoàn thành', grey: 'Chưa đến kỳ', blue: 'Kế hoạch đã duyệt' };
+function legend() { return '<div class="row small" style="margin:6px 0 10px">' + Object.keys(COLOR).map(function (k) { return chip(COLOR[k], k); }).join(' ') + '</div>'; }
 function chip(label, c) { return '<span class="chip c-' + c + '">' + esc(label) + '</span>'; }
 function localStatus(p) {
   var q = queuedFor(p.assignment_point_id);
@@ -395,16 +405,25 @@ ACT.sendIncident = function (d, el) {
       .catch(function (e) { busy(el, false); if (e.network) q(); else fail(e); });
   });
 };
+function incRange(kind, d) {
+  if (kind === 'day') return { from: d, to: d };
+  if (kind === 'month') return { from: d.slice(0, 7) + '-01', to: d.slice(0, 7) + '-31' };
+  if (kind === 'year') return { from: d.slice(0, 4) + '-01-01', to: d.slice(0, 4) + '-12-31' };
+  return {};
+}
 ROUTES['su-co'] = function (args) {
-  var g = args[0] || '';
-  api('incidents.list', { group: g }).then(function (list) {
+  var g = args[0] || '', kind = args[1] || 'all', day = args[2] || today(), rg = incRange(kind, day);
+  S.incF = { g: g, kind: kind, day: day };
+  api('incidents.list', { group: g, from: rg.from || '', to: rg.to || '' }).then(function (list) {
     var mgr = S.me.is_manager, canClose = S.me.authority.indexOf('INCIDENT_CLOSE') >= 0;
     var h = '<div class="row" style="justify-content:space-between"><h1>Sự cố</h1><button class="btn warn" data-act="newIncident">Ghi nhận sự cố</button></div><div class="row" style="margin:8px 0">' +
-      [['', 'Tất cả'], ['OPEN', 'Chưa xử lý'], ['HANDLING', 'Đang xử lý'], ['MONITORING', 'Theo dõi'], ['DONE', 'Đã xử lý']].map(function (x) { return '<a class="btn sm ' + (g === x[0] ? '' : 'sec') + '" href="#/su-co/' + x[0] + '">' + x[1] + '</a>'; }).join('') + '</div>';
+      [['', 'Tất cả'], ['OPEN', 'Chưa xử lý'], ['HANDLING', 'Đang xử lý'], ['MONITORING', 'Theo dõi'], ['DONE', 'Đã xử lý']].map(function (x) { return '<a class="btn sm ' + (g === x[0] ? '' : 'sec') + '" href="#/su-co/' + x[0] + '/' + kind + '/' + day + '">' + x[1] + '</a>'; }).join('') + '</div>' +
+      '<div class="row" style="margin-bottom:8px"><select id="iKind" aria-label="Lọc theo thời gian" style="width:auto">' + [['all', 'Toàn bộ thời gian'], ['day', 'Ngày'], ['month', 'Tháng'], ['year', 'Năm']].map(function (x) { return '<option value="' + x[0] + '"' + (kind === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>' +
+      '<input id="iDay" type="date" value="' + esc(day) + '" aria-label="Ngày tham chiếu" style="width:auto"><button class="btn sm" data-act="incGo">Lọc</button><span class="small muted">' + list.length + ' sự cố</span></div>';
     if (!list.length) h += '<div class="card">Không có sự cố.</div>';
     list.forEach(function (i) {
       var gg = IG[i.group];
-      h += '<div class="card bl-' + gg[1] + '"><div class="row" style="justify-content:space-between"><b>' + esc(i.incident_code) + ' · ' + esc(i.asset_code) + '</b>' + chip(IS[i.status] || i.status, gg[1]) + '</div>' +
+      h += '<div class="card bl-' + gg[1] + '"><div class="row" style="justify-content:space-between"><a href="#/su-co-ct/' + i.incident_id + '"><b>' + esc(i.incident_code) + ' · ' + esc(i.asset_code) + '</b></a>' + chip(IS[i.status] || i.status, gg[1]) + '</div>' +
         '<div>' + esc(i.description) + '</div><div class="small muted">Phát hiện ' + vnTime(i.detected_at) + ' · ' + esc(i.reporter || '') + (i.handler ? ' · Xử lý: ' + esc(i.handler) : '') + (i.is_recurrence ? ' · <b>Tái diễn</b>' : '') + '</div>' +
         (i.resolution_note ? '<div class="small">Kết quả: ' + esc(i.resolution_note) + '</div>' : '') +
         (i.photo_id ? '<img id="ip' + i.incident_id + '" class="photo" alt="Ảnh sự cố">' : '');
@@ -418,6 +437,41 @@ ROUTES['su-co'] = function (args) {
     $app.innerHTML = h;
     list.forEach(function (i) { if (i.photo_id) loadPhoto(i.photo_id, 'ip' + i.incident_id); });
   }).catch(fail);
+};
+ACT.incGo = function () { location.hash = '#/su-co/' + (S.incF ? S.incF.g : '') + '/' + val('iKind') + '/' + (val('iDay') || today()); };
+
+// ================= HỒ SƠ SỰ CỐ (V1.2, bản tổng hợp Mục 7) =================
+var PH = { PHOTO_SCENE: 'Ảnh hiện trường', INCIDENT_BEFORE: 'Ảnh trước xử lý', INCIDENT_AFTER: 'Ảnh sau xử lý' };
+ROUTES['su-co-ct'] = function (args) {
+  api('incidents.get', { incident_id: args[0] }).then(function (i) {
+    var gg = IG[i.group], L = S.lists || {};
+    var lbl = function (list, c) { var x = (list || []).filter(function (y) { return y.code === c; })[0]; return x ? x.label : c; };
+    var h = '<a href="javascript:history.back()">← Quay lại</a><div class="card bl-' + gg[1] + '" style="margin-top:8px"><div class="row" style="justify-content:space-between"><h1>' + esc(i.incident_code) + '</h1>' + chip(IS[i.status] || i.status, gg[1]) + '</div>' +
+      '<div>' + (S.me.is_manager ? '<a href="#/tai-san/' + i.asset_id + '"><b>' + esc(i.asset_code) + '</b></a>' : '<b>' + esc(i.asset_code) + '</b>') + ' · ' + esc(i.asset_name) + (i.is_recurrence ? ' ' + chip('Tái diễn', 'red') : '') + '</div>' +
+      '<div class="tbl" style="margin-top:8px"><table><tbody>' +
+      [['Mô tả', esc(i.description)], ['Loại', esc(lbl(L.incident_types, i.incident_type_code))], ['Mức độ', esc(lbl(L.severities, i.severity_code))], ['Phát hiện', vnFull(i.detected_at) + ' · ' + esc(i.reporter)],
+        ['Vị trí', mapLink(i.latitude, i.longitude, i.gps_accuracy_m)], ['Hạng mục liên quan', esc(i.works.join(', ')) || '<span class="muted">Chưa xác định – ghi nhận ở cấp tài sản</span>'],
+        ['Người xử lý', esc(i.handler)], ['Kết quả xử lý', esc(i.resolution_note) + (i.resolved_at ? ' <span class="small muted">(' + vnFull(i.resolved_at) + ')</span>' : '')], ['Đóng hồ sơ', i.closed_at ? vnFull(i.closed_at) + ' · ' + esc(i.closed_by) : '']]
+        .map(function (y) { return '<tr><th style="width:34%">' + y[0] + '</th><td>' + y[1] + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+      (i.photos.length ? '<div class="photos" style="margin:8px 0">' + i.photos.map(function (p) { return '<div><div class="small">' + (PH[p.evidence_type] || 'Ảnh') + '</div><img id="ic' + p.attachment_id + '" class="photo" alt="' + (PH[p.evidence_type] || 'Ảnh') + '"></div>'; }).join('') + '</div>' : '') + '</div>';
+    if (i.next.length) {
+      var acts = i.next.filter(function (n) { return S.me.authority.indexOf('INCIDENT_CLOSE') >= 0 || ['RECEIVED', 'IN_PROGRESS'].indexOf(n) >= 0; });
+      if (acts.length) h += '<div class="card"><h2>Xử lý</h2><div class="field"><label for="icNote">Nội dung</label><input id="icNote"></div>' +
+        '<div class="field"><label for="icBefore">Ảnh trước xử lý (nếu có)</label><input id="icBefore" type="file" accept="image/*" capture="environment"></div>' +
+        '<div class="field"><label for="icAfter">Ảnh sau xử lý (nếu có)</label><input id="icAfter" type="file" accept="image/*" capture="environment"></div><div class="row">' +
+        acts.map(function (n) { return '<button class="btn" data-act="incActCt" data-id="' + i.incident_id + '" data-to="' + n + '">' + esc(IS[n]) + '</button>'; }).join('') + '</div></div>';
+    }
+    h += '<div class="card"><h2>Nhật ký xử lý</h2>' + i.actions.map(function (x) { return '<div class="check"><div style="flex:1"><div class="small muted">' + vnFull(x.action_at) + ' · ' + esc(x.actor) + '</div>' + esc(IS[x.status_after] || x.action_type) + (x.note ? ': ' + esc(x.note) : '') + '</div></div>'; }).join('') + '</div>';
+    $app.innerHTML = h;
+    i.photos.forEach(function (p) { loadPhoto(p.attachment_id, 'ic' + p.attachment_id); });
+  }).catch(fail);
+};
+ACT.incActCt = function (d, el) {
+  busy(el, true);
+  var files = [['photo_before_id', $('icBefore').files[0], 'INCIDENT_BEFORE'], ['photo_after_id', $('icAfter').files[0], 'INCIDENT_AFTER']].filter(function (x) { return x[1]; });
+  var payload = { incident_id: d.id, to_status: d.to, note: val('icNote') }, up = Promise.resolve();
+  files.forEach(function (x) { up = up.then(function () { return readPhoto(x[1]); }).then(function (b64) { return api('files.upload', { data_base64: b64, mime_type: 'image/jpeg', evidence_type: x[2] }); }).then(function (r) { payload[x[0]] = r.attachment_id; }); });
+  up.then(function () { return api('incidents.act', payload); }).then(function () { toast('Đã cập nhật sự cố.', 'ok'); route(); }).catch(function (e) { busy(el, false); fail(e); });
 };
 ACT.incAct = function (d, el) { busy(el, true); api('incidents.act', { incident_id: d.id, to_status: d.to, note: val('in' + d.id) }).then(function () { toast('Đã cập nhật sự cố.', 'ok'); route(); }).catch(function (e) { busy(el, false); fail(e); }); };
 
@@ -483,9 +537,8 @@ ROUTES['dashboard'] = function (args) {
     S.dash = { per: per, ref: ref };
     var k = d.kpi;
     var h = '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><div class="sub" style="font-weight:600;letter-spacing:.06em">ĐẶT HÀNG TN-XLNT</div><h1>QUẢN LÝ TÀI SẢN</h1><div>' + esc(d.station) + ' · ' + esc(d.period.label) + '</div></div>' +
-      '<div class="row"><select id="dPer" aria-label="Kỳ" style="width:auto"><option value="month"' + (per === 'month' ? ' selected' : '') + '>Tháng</option><option value="quarter"' + (per === 'quarter' ? ' selected' : '') + '>Quý</option><option value="year"' + (per === 'year' ? ' selected' : '') + '>Năm</option></select>' +
-      '<input id="dRef" type="month" value="' + ref + '" aria-label="Tháng tham chiếu" style="width:auto"><button class="btn" data-act="dashGo">Xem</button></div></div>' +
-      '<p class="small muted">Tính theo ngày đến hạn. Cập nhật lúc ' + vnTime(d.generated_at) + '. Kỳ đã qua: số đã hoàn thành có thể tăng do xác nhận sau kỳ.</p>' +
+      periodPicker(per, ref, 'dashGo') + '</div>' +
+      '<p class="small muted">Tính theo ngày đến hạn. Cập nhật lúc ' + vnTime(d.generated_at) + '. Kỳ đã qua: số đã hoàn thành có thể tăng do xác nhận sau kỳ.</p>' + legend() +
       '<div class="grid kpis" style="margin:10px 0">' + [['Tổng số tài sản', k.assets, ''], ['Phải thực hiện', k.due, 'lần đã đến hạn'], ['Đã hoàn thành', k.done, 'đã xác nhận đạt', 'var(--green)'], ['Chưa hoàn thành', k.notDone, 'quá hạn ' + k.overdue, 'var(--red)'],
         ['Chưa đến kỳ', k.notYet, 'không tính chưa hoàn thành'], ['Loại trừ theo quyết định', k.excluded, 'miễn đã duyệt'], ['Sự cố', k.incOpen + ' chưa xử lý', k.incPeriod + ' phát sinh trong kỳ', '#7C2D12'], ['Bổ sung / phát sinh', k.bosung + ' / ' + k.phatsinh, 'thống kê riêng']]
         .map(function (x) { return '<div class="card kpi" style="margin:0"><div class="l">' + x[0] + '</div><div class="v"' + (x[3] ? ' style="color:' + x[3] + '"' : '') + '>' + esc(x[1]) + '</div><div class="small muted">' + esc(x[2]) + '</div></div>'; }).join('') + '</div>' +
@@ -502,23 +555,94 @@ ROUTES['dashboard'] = function (args) {
             '<div class="bar"><div style="width:' + pct + '%;background:' + (x.color === 'red' ? '#C0392B' : x.color === 'green' ? '#1E7B45' : x.color === 'amber' ? '#C98A00' : '#1D4ED8') + '"></div></div>' +
             '<div class="small muted">Chưa đến kỳ ' + st.notYet + ' · Bổ sung ' + x.bosung + ' · Phát sinh ' + x.phatsinh + (x.excluded ? ' · Loại trừ ' + x.excluded : '') + '</div></button>';
         }).join('') + '</div>';
-      }).join('') + '</div><div id="drill"></div>';
+      }).join('') + '</div>';
     $app.innerHTML = h;
   }).catch(fail);
 };
-ACT.dashGo = function () { location.hash = '#/dashboard/' + val('dPer') + '/' + (val('dRef') || today().slice(0, 7)); };
-ACT.drill = function (d) {
-  $('drill').innerHTML = '<div class="loading">Đang tải…</div>';
-  api('dashboard.drilldown', { period: S.dash.per, ref: S.dash.ref, work_id: d.work || '', cum_id: d.cum || '' }).then(function (rows) {
-    $('drill').innerHTML = '<div class="card" style="margin-top:14px"><h2>' + esc(d.name) + ' – từng lần đến hạn</h2>' + occTable(rows, false) + '</div>';
-    $('drill').scrollIntoView({ behavior: 'smooth' });
+ACT.dashGo = function () { var v = perVal(); location.hash = '#/dashboard/' + v[0] + '/' + v[1]; };
+ACT.perChange = function () { var r = $('dRef'); if (r) r.hidden = val('dPer') === 'all'; };
+// V1.2: bấm cụm → tài sản thuộc cụm; bấm hạng mục → tài sản áp dụng hạng mục
+ACT.drill = function (d) { location.hash = '#/ds-tai-san/' + S.dash.per + '/' + S.dash.ref + '/' + (d.cum ? 'cum/' + d.cum : 'work/' + d.work); };
+ROUTES['ds-tai-san'] = function (args) {
+  var per = args[0] || 'month', ref = args[1] || today().slice(0, 7), kind = args[2], id = args[3];
+  var q = { period: per, ref: ref }; q[kind === 'cum' ? 'cum_id' : 'work_id'] = id;
+  api('dashboard.assets', q).then(function (r) {
+    S.dash = { per: per, ref: ref };
+    var h = '<a href="#/dashboard/' + per + '/' + ref + '">← Dashboard Trạm</a><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="sub">' + (r.kind === 'CUM' ? 'Cụm tài sản' : 'Hạng mục công việc') + ' · ' + esc(r.period.label) + '</div><h1>' + esc(r.title) + '</h1><div class="small muted">' + r.assets.length + ' tài sản</div></div></div>' + legend();
+    h += r.assets.length ? '<div class="tbl"><table><thead><tr><th>Tài sản</th>' + (r.kind === 'WORK' ? '<th>Cụm</th>' : '') + '<th>Phải thực hiện</th><th>Đã hoàn thành</th><th>Chưa hoàn thành</th><th>Chưa đến kỳ</th><th>Sự cố chưa xử lý</th><th>Trạng thái</th></tr></thead><tbody>' +
+      r.assets.map(function (a) {
+        return '<tr><td><a href="#/tai-san/' + a.asset_id + '/' + per + '/' + ref + '"><b>' + esc(a.asset_code) + '</b></a><div class="small">' + esc(a.asset_name) + '</div></td>' + (r.kind === 'WORK' ? '<td>' + esc(a.cum_name) + '</td>' : '') +
+          '<td>' + a.stat.due + '</td><td style="color:var(--green)">' + a.stat.done + '</td><td style="color:var(--red)">' + a.stat.notDone + '</td><td>' + a.stat.notYet + '</td><td>' + a.incOpen + '</td><td>' + chip(COLOR[a.color], a.color) + '</td></tr>';
+      }).join('') + '</tbody></table></div>' : '<div class="card muted">Không có tài sản.</div>';
+    h += '<div class="card" style="margin-top:12px"><button class="btn sec" data-act="occAll" data-k="' + esc(kind) + '" data-id="' + esc(id) + '">Xem từng lần đến hạn</button><div id="occAll"></div></div>';
+    $app.innerHTML = h;
   }).catch(fail);
 };
+ACT.occAll = function (d) {
+  $('occAll').innerHTML = '<div class="loading">Đang tải…</div>';
+  var q = { period: S.dash.per, ref: S.dash.ref }; q[d.k === 'cum' ? 'cum_id' : 'work_id'] = d.id;
+  api('dashboard.drilldown', q).then(function (rows) { $('occAll').innerHTML = occTable(rows, false); }).catch(fail);
+};
+
+// ================= HỒ SƠ TÀI SẢN (V1.2, bản tổng hợp Mục 4) =================
+ROUTES['tai-san'] = function (args) {
+  var id = args[0], per = args[1] || 'month', ref = args[2] || today().slice(0, 7);
+  api('assets.get', { asset_id: id, period: per, ref: ref }).then(function (r) {
+    var a = r.asset, I = r.incidents;
+    S.asset = { id: id };
+    var h = '<a href="javascript:history.back()">← Quay lại</a><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="sub">' + esc(a.nhom_name) + ' · ' + esc(a.cum_name) + '</div><h1>' + esc(a.asset_code) + '</h1><div>' + esc(a.asset_name) + '</div></div>' + periodPicker(per, ref, 'assetGo') + '</div>' +
+      '<div class="row small" style="margin:8px 0"><a class="btn sm sec" href="#hs1" data-act="jump" data-to="hs1">1. Hồ sơ</a><a class="btn sm sec" href="#hs2" data-act="jump" data-to="hs2">2. Bảo dưỡng định kỳ</a><a class="btn sm sec" href="#hs3" data-act="jump" data-to="hs3">3. Sự cố</a><a class="btn sm sec" href="#hs4" data-act="jump" data-to="hs4">4. Lịch sử</a></div>';
+    var f = [['Loại tài sản', a.asset_type], ['Tình trạng', a.asset_status], ['Vị trí', a.location_text], ['Tọa độ', mapLink(a.latitude, a.longitude)], ['Thông số kỹ thuật', a.technical_specs], ['Ngày bắt đầu quản lý', dmy(String(a.effective_from || '').slice(0, 10))], ['Nguồn hồ sơ', a.source_ref], ['Ghi chú', a.note]];
+    h += '<div class="card" id="hs1"><h2>1. Hồ sơ tài sản</h2><div class="tbl"><table><tbody>' + f.map(function (x) { return '<tr><th style="width:38%">' + x[0] + '</th><td>' + (x[0] === 'Tọa độ' ? x[1] : esc(x[1])) + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+      '<h3 style="margin-top:12px">Hạng mục áp dụng</h3>' + (r.applied.length ? '<div class="tbl"><table><thead><tr><th>Hạng mục</th><th>Chu kỳ</th><th>Từ ngày</th></tr></thead><tbody>' + r.applied.map(function (w) { return '<tr><td>' + esc(w.work_name) + '</td><td>' + esc(w.cycle) + '</td><td>' + dmy(String(w.effective_from || '').slice(0, 10)) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="muted small">Chưa có.</div>') + '</div>';
+    var groups = {}; r.maintenance.forEach(function (o) { (groups[o.work_name] = groups[o.work_name] || []).push(o); });
+    h += '<div class="card" id="hs2"><h2>2. Bảo dưỡng định kỳ · ' + esc(r.period.label) + '</h2>' + (r.maintenance.length ? Object.keys(groups).map(function (w) {
+      var g = groups[w], ok = g.filter(function (o) { return o.state === 'PASSED'; }).length;
+      return '<h3 style="margin-top:10px">' + esc(w) + ' <span class="small muted">' + ok + '/' + g.length + ' lần đã đạt</span></h3><div class="tbl"><table><thead><tr><th>Lần</th><th>Ngày đến hạn</th><th>Hạn hoàn thành</th><th>Trạng thái</th></tr></thead><tbody>' +
+        g.map(function (o) { return '<tr><td><a href="#/lan/' + o.occurrence_id + '">Lần ' + esc(o.seq_in_period) + ' · ' + esc(o.period_key) + '</a></td><td>' + dmy(o.due_date) + (o.planned_date ? '<div class="small">dời đến ' + dmy(o.planned_date) + '</div>' : '') + '</td><td>' + dmy(o.completion_deadline) + '</td><td>' + chip(o.state_label, OC[o.state] || 'grey') + '</td></tr>'; }).join('') + '</tbody></table></div>';
+    }).join('') : '<div class="muted">Không có lần đến hạn trong kỳ.</div>') + '</div>';
+    h += '<div class="card" id="hs3"><h2>3. Sự cố phát sinh và xử lý · ' + esc(r.period.label) + '</h2><div class="grid kpis" style="margin-bottom:8px">' +
+      [['Tổng số', I.total, ''], ['Đã xử lý', I.done, 'var(--green)'], ['Chưa xử lý', I.open, 'var(--red)'], ['Tái diễn', I.recurrence, '#7C2D12']].map(function (x) { return '<div class="kpi"><div class="v"' + (x[2] ? ' style="color:' + x[2] + '"' : '') + '>' + x[1] + '</div><div class="l">' + x[0] + '</div></div>'; }).join('') + '</div>' +
+      (I.list.length ? I.list.map(function (i) { var gg = IG[i.group]; return '<a class="card bl-' + gg[1] + '" style="display:block;text-decoration:none;color:inherit;margin-bottom:6px" href="#/su-co-ct/' + i.incident_id + '"><b>' + esc(i.incident_code) + '</b> ' + chip(IS[i.status] || i.status, gg[1]) + (i.is_recurrence ? ' ' + chip('Tái diễn', 'red') : '') + '<div class="small">' + esc(i.description) + '</div><div class="small muted">' + vnTime(i.detected_at) + '</div></a>'; }).join('') : '<div class="muted">Không có sự cố trong kỳ.</div>') + '</div>';
+    h += '<div class="card" id="hs4"><h2>4. Lịch sử tài sản</h2>' + (r.history.length ? r.history.map(function (x) {
+      var link = x.occurrence_id ? '#/lan/' + x.occurrence_id : x.incident_id ? '#/su-co-ct/' + x.incident_id : '';
+      return '<div class="check"><div style="flex:1"><div class="small muted">' + vnFull(x.at) + ' · ' + esc(x.kind) + (x.by ? ' · ' + esc(x.by) : '') + '</div>' + (link ? '<a href="' + link + '">' + esc(x.text) + '</a>' : esc(x.text)) + '</div></div>';
+    }).join('') : '<div class="muted">Chưa có.</div>') + '</div>';
+    $app.innerHTML = h;
+  }).catch(fail);
+};
+ACT.assetGo = function () { var v = perVal(); location.hash = '#/tai-san/' + S.asset.id + '/' + v[0] + '/' + v[1]; };
+ACT.jump = function (d) { var e = $(d.to); if (e) e.scrollIntoView({ behavior: 'smooth' }); };
+
+// ================= CHI TIẾT TỪNG LẦN THỰC HIỆN (V1.2, bản tổng hợp Mục 3.5) =================
+ROUTES['lan'] = function (args) {
+  api('occurrences.detail', { occurrence_id: args[0] }).then(function (r) {
+    var o = r.occurrence;
+    var h = '<a href="javascript:history.back()">← Quay lại</a><div class="card" style="margin-top:8px"><div class="sub">' + esc(o.occurrence_code) + '</div><h1>' + esc(o.work_name) + ' · lần ' + esc(o.seq_in_period) + '</h1>' +
+      '<div><a href="#/tai-san/' + o.asset_id + '"><b>' + esc(o.asset_code) + '</b></a> · ' + esc(o.asset_name) + '</div>' +
+      '<div class="small">Kỳ ' + esc(o.period_key) + ' · Đến hạn ' + dmy(o.due_date) + ' · Hạn hoàn thành ' + dmy(o.completion_deadline) + (o.planned_date ? ' · Dời đến ' + dmy(o.planned_date) : '') + '</div>' +
+      (o.quality_standard_text ? '<div class="small">Tiêu chuẩn: ' + esc(o.quality_standard_text) + '</div>' : '') + '<div style="margin-top:6px">' + chip(o.state_label, OC[o.state] || 'grey') + '</div></div>';
+    if (!r.results.length) h += '<div class="card muted">Chưa có lần thực hiện.</div>';
+    r.results.forEach(function (x, k) {
+      h += '<div class="card"><div class="row" style="justify-content:space-between"><h2>Lần thực hiện ' + (k + 1) + (x.is_rework ? ' ' + chip('Làm lại', 'amber') : '') + '</h2>' + chip(RS[x.result_status] || x.result_status, x.result_status === 'PASSED' ? 'green' : x.result_status === 'RETURNED' ? 'red' : 'amber') + '</div>' +
+        '<div class="tbl"><table><tbody>' +
+        [['Người thực hiện', esc(x.performer) + (x.assignment_code ? ' <span class="small muted">(' + esc(x.assignment_code) + ')</span>' : '')], ['Bắt đầu', vnFull(x.started_at)], ['Kết thúc', vnFull(x.submitted_at)], ['Thời lượng', x.submitted_at ? dur(x.duration_seconds) : ''],
+          ['GPS bắt đầu', mapLink(x.start_lat, x.start_lng, x.start_acc)], ['GPS kết thúc', mapLink(x.end_lat, x.end_lng, x.end_acc) || esc(x.gps_missing_reason ? 'Không có – ' + x.gps_missing_reason : '')],
+          ['Nội dung kết quả', esc(x.note)], ['Ghi nhận', x.sync_origin === 'OFFLINE_QUEUE' ? 'Gửi sau khi mất mạng; giờ trên máy ' + esc(vnFull(x.device_time)) : 'Trực tuyến']]
+          .map(function (y) { return '<tr><th style="width:34%">' + y[0] + '</th><td>' + y[1] + '</td></tr>'; }).join('') + '</tbody></table></div>' +
+        '<div class="photos" style="margin:8px 0"><div><div class="small">Ảnh trước</div><img id="rb' + x.work_result_id + '" class="photo" alt="Ảnh trước"></div><div><div class="small">Ảnh sau</div><img id="ra' + x.work_result_id + '" class="photo" alt="Ảnh sau"></div></div>' +
+        '<h3>Xác nhận</h3>' + (x.checks.length ? x.checks.map(function (q) { return '<div class="small">' + vnFull(q.checked_at) + ' · ' + esc(q.checker) + ' · <b>' + (q.decision === 'PASSED' ? 'Đạt' : 'Trả lại') + '</b>' + (q.comment ? ': ' + esc(q.comment) : '') + '</div>'; }).join('') : '<div class="small muted">Chưa xác nhận.</div>') + '</div>';
+    });
+    $app.innerHTML = h;
+    r.results.forEach(function (x) { loadPhoto(x.photo_before_id, 'rb' + x.work_result_id); loadPhoto(x.photo_after_id, 'ra' + x.work_result_id); });
+  }).catch(fail);
+};
+var RS = { IN_PROGRESS: 'Đang thực hiện', SUBMITTED: 'Chờ xác nhận', PASSED: 'Đạt', RETURNED: 'Bị trả lại', CANCELLED: 'Đã hủy' };
 var OC = { PASSED: 'green', OVERDUE: 'red', OPEN: 'blue', NOT_YET: 'grey', EXCLUDED: 'dark' };
 function occTable(rows, actions) {
   if (!rows.length) return '<div class="muted">Không có lần đến hạn.</div>';
   return '<div class="tbl"><table><thead><tr><th>Tài sản</th><th>Hạng mục</th><th>Lần</th><th>Ngày đến hạn</th><th>Hạn hoàn thành</th><th>Trạng thái</th>' + (actions ? '<th></th>' : '') + '</tr></thead><tbody>' +
-    rows.map(function (o) { return '<tr><td><b>' + esc(o.asset_code) + '</b></td><td>' + esc(o.work_name) + '</td><td>' + esc(o.seq_in_period) + '</td><td>' + dmy(o.due_date) + (o.planned_date ? '<div class="small">dời đến ' + dmy(o.planned_date) + '</div>' : '') + '</td><td>' + dmy(o.completion_deadline) + '</td><td>' + chip(o.state_label, OC[o.state] || 'grey') + (o.disposition_pending ? '<div class="small">đề nghị đang chờ duyệt</div>' : '') + '</td>' +
+    rows.map(function (o) { return '<tr><td><b>' + esc(o.asset_code) + '</b></td><td>' + esc(o.work_name) + '</td><td><a href="#/lan/' + o.occurrence_id + '">' + esc(o.seq_in_period) + '</a></td><td>' + dmy(o.due_date) + (o.planned_date ? '<div class="small">dời đến ' + dmy(o.planned_date) + '</div>' : '') + '</td><td>' + dmy(o.completion_deadline) + '</td><td>' + chip(o.state_label, OC[o.state] || 'grey') + (o.disposition_pending ? '<div class="small">đề nghị đang chờ duyệt</div>' : '') + '</td>' +
       (actions ? '<td>' + (o.state !== 'PASSED' && o.state !== 'EXCLUDED' && !o.disposition_pending ? '<button class="btn sm sec" data-act="dsForm" data-id="' + o.occurrence_id + '" data-code="' + esc(o.occurrence_code) + '" data-dl="' + o.completion_deadline + '">Dời / miễn</button>' : '') + '</td>' : '') + '</tr>'; }).join('') + '</tbody></table></div>';
 }
 
