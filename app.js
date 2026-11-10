@@ -146,7 +146,7 @@ function navItems() {
   var roles = {}; (m.roles || []).forEach(function (x) { roles[x] = 1; });
   var it = [];
   if (roles.WORKER || roles.TEAM_LEAD) it.push(['nhiem-vu', 'Nhiệm vụ của tôi']);
-  if (m.is_manager) { it.push(['sep', 'QUẢN LÝ TRẠM']); it.push(['dashboard', 'Dashboard Trạm']); it.push(['ke-hoach', 'Kế hoạch']); it.push(['giao-viec', 'Giao việc']); it.push(['lan-den-han', 'Lần đến hạn']); }
+  if (m.is_manager) { it.push(['sep', 'QUẢN LÝ TRẠM']); it.push(['dashboard', 'Dashboard Trạm']); it.push(['ke-hoach', 'Kế hoạch']); it.push(['giao-viec', 'Giao việc']); it.push(['lan-den-han', 'Lần đến hạn']); it.push(['nhan-su', 'Nhân sự']); }
   if (a.QUALITY_CHECK) it.push(['xac-nhan', 'Chờ xác nhận']);
   if (a.PLAN_APPROVE || a.ROUTE_EXCEPTION || a.OCC_DISPOSITION) it.push(['duyet', 'Chờ duyệt']);
   it.push(['sep', 'CHUNG']); it.push(['su-co', 'Sự cố']); it.push(['thong-bao', 'Thông báo']);
@@ -439,6 +439,41 @@ ROUTES['su-co'] = function (args) {
   }).catch(fail);
 };
 ACT.incGo = function () { location.hash = '#/su-co/' + (S.incF ? S.incF.g : '') + '/' + val('iKind') + '/' + (val('iDay') || today()); };
+
+// ================= NHÂN SỰ (V1.2.1, bản tổng hợp Mục 8.3) =================
+ROUTES['nhan-su'] = function (args) {
+  var per = args[0] || 'month', ref = args[1] || today().slice(0, 7);
+  api('people.list', { period: per, ref: ref }).then(function (r) {
+    S.pp = { per: per, ref: ref };
+    $app.innerHTML = '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><h1>Nhân sự</h1><div class="sub">' + esc(S.me.don_vi_name) + ' · ' + esc(r.period.label) + ' · ' + r.people.length + ' người</div></div>' + periodPicker(per, ref, 'peopleGo') + '</div>' +
+      '<p class="small muted">Số liệu thống kê theo kỳ, sắp theo mã nhân viên. Bấm họ tên để xem hồ sơ tác nghiệp.</p>' +
+      (r.people.length ? '<div class="tbl"><table><thead><tr><th>Mã</th><th>Họ tên</th><th>Tổ</th><th>Vai trò</th><th>Nhiệm vụ được giao</th><th>Kết quả đã báo</th><th>Đạt</th><th>Bị trả lại</th><th>Sự cố phát hiện</th></tr></thead><tbody>' +
+        r.people.map(function (u) {
+          return '<tr><td>' + esc(u.employee_code) + '</td><td><a href="#/nhan-su-ct/' + u.user_id + '/' + per + '/' + ref + '"><b>' + esc(u.full_name) + '</b></a>' + (u.account_status !== 'ACTIVE' ? ' ' + chip('Đã khóa', 'grey') : '') + '<div class="small muted">' + esc(u.email) + '</div></td><td>' + esc(u.team_name) + '</td><td>' + esc(u.roles.join(', ')) + '</td>' +
+            '<td>' + u.assignments + '</td><td>' + u.submitted + '</td><td style="color:var(--green)">' + u.passed + '</td><td style="color:var(--red)">' + u.returned + '</td><td>' + u.incidents + '</td></tr>';
+        }).join('') + '</tbody></table></div>' : '<div class="card muted">Trạm chưa có người dùng.</div>');
+  }).catch(fail);
+};
+ACT.peopleGo = function () { var v = perVal(); location.hash = '#/nhan-su/' + v[0] + '/' + v[1]; };
+var AS2 = { ROUTE: 'Theo tuyến', SINGLE: 'Đơn lẻ' };
+ROUTES['nhan-su-ct'] = function (args) {
+  var id = args[0], per = args[1] || 'month', ref = args[2] || today().slice(0, 7);
+  api('people.get', { user_id: id, period: per, ref: ref }).then(function (r) {
+    var u = r.person, k = r.summary;
+    S.person = { id: id };
+    var h = '<a href="#/nhan-su/' + per + '/' + ref + '">← Nhân sự</a><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="sub">' + esc(u.employee_code) + ' · ' + esc(u.team_name) + ' · ' + esc(u.roles.join(', ')) + '</div><h1>' + esc(u.full_name) + '</h1><div class="small muted">' + esc(u.email) + (u.account_status !== 'ACTIVE' ? ' · Đã khóa' : '') + ' · ' + esc(r.period.label) + '</div></div>' + periodPicker(per, ref, 'personGo') + '</div>' +
+      '<div class="grid kpis" style="margin:10px 0">' + [['Nhiệm vụ được giao', k.assignments, ''], ['Kết quả đã báo', k.submitted, ''], ['Đạt', k.passed, 'var(--green)'], ['Chờ xác nhận', k.waiting, 'var(--amber)'], ['Bị trả lại', k.returned, 'var(--red)'], ['Sự cố', k.incidents, '#7C2D12'], ['Đề nghị ngoại lệ', k.exceptions, '']]
+        .map(function (x) { return '<div class="card kpi" style="margin:0"><div class="l">' + x[0] + '</div><div class="v"' + (x[2] ? ' style="color:' + x[2] + '"' : '') + '>' + x[1] + '</div></div>'; }).join('') + '</div>';
+    h += '<div class="card"><h2>Nhiệm vụ được giao</h2>' + (r.assignments.length ? '<div class="tbl"><table><thead><tr><th>Ngày</th><th>Mã</th><th>Tuyến / công việc</th><th>Loại</th><th>Tiếp nhận</th><th>Tiến độ</th><th>Trạng thái</th></tr></thead><tbody>' +
+      r.assignments.map(function (a) { return '<tr><td>' + dmy(a.work_date) + '</td><td>' + esc(a.assignment_code) + '</td><td>' + esc(a.route_name) + '</td><td>' + esc(AS2[a.mode] || a.mode) + '</td><td>' + (a.accepted_at ? vnFull(a.accepted_at) : '<span class="muted">Chưa</span>') + '</td><td>' + a.verified + '/' + a.points + ' đạt</td><td>' + esc(AS[a.status] || a.status) + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="muted">Không có nhiệm vụ trong kỳ.</div>') + '</div>';
+    h += '<div class="card"><h2>Kết quả thực hiện</h2>' + (r.results.length ? '<div class="tbl"><table><thead><tr><th>Tài sản</th><th>Hạng mục</th><th>Bắt đầu</th><th>Kết thúc</th><th>Thời lượng</th><th>GPS</th><th>Trạng thái</th></tr></thead><tbody>' +
+      r.results.map(function (x) { return '<tr><td><a href="#/tai-san/' + x.asset_id + '"><b>' + esc(x.asset_code) + '</b></a></td><td>' + (x.occurrence_id ? '<a href="#/lan/' + x.occurrence_id + '">' + esc(x.work_name) + '</a>' : esc(x.work_name) + ' <span class="small muted">(' + esc(SRC[x.source_type] || '') + ')</span>') + (x.is_rework ? ' ' + chip('Làm lại', 'amber') : '') + '</td><td>' + vnFull(x.started_at) + '</td><td>' + vnFull(x.submitted_at) + '</td><td>' + (x.submitted_at ? dur(x.duration_seconds) : '') + '</td><td>' + (mapLink(x.end_lat, x.end_lng, x.end_acc) || esc(x.gps_missing_reason || '')) + (x.sync_origin === 'OFFLINE_QUEUE' ? '<div class="small muted">gửi sau khi mất mạng</div>' : '') + '</td><td>' + chip(RS[x.result_status] || x.result_status, x.result_status === 'PASSED' ? 'green' : x.result_status === 'RETURNED' ? 'red' : 'amber') + '</td></tr>'; }).join('') + '</tbody></table></div>' : '<div class="muted">Không có kết quả trong kỳ.</div>') + '</div>';
+    h += '<div class="card"><h2>Sự cố</h2>' + (r.incidents.length ? r.incidents.map(function (i) { var gg = IG[i.group]; return '<div class="check"><div style="flex:1"><a href="#/su-co-ct/' + i.incident_id + '"><b>' + esc(i.incident_code) + '</b> · ' + esc(i.asset_code) + '</a> ' + chip(IS[i.status] || i.status, gg[1]) + ' <span class="small muted">' + esc(i.role) + ' · ' + vnTime(i.detected_at) + '</span><div class="small">' + esc(i.description) + '</div></div></div>'; }).join('') : '<div class="muted">Không có sự cố trong kỳ.</div>') + '</div>';
+    h += '<div class="card"><h2>Đề nghị ngoại lệ</h2>' + (r.exceptions.length ? r.exceptions.map(function (e) { return '<div class="small">' + vnFull(e.requested_at) + ' · ' + esc(e.asset_code) + ' · ' + (e.scope === 'POINT' ? (e.request_type === 'REORDER' ? 'Đổi thứ tự' : 'Bỏ qua điểm') : 'Không làm hạng mục') + ' · ' + esc(reasonLabel(e.reason_code)) + ' · <b>' + ({ PENDING: 'Chờ duyệt', APPROVED: 'Chấp thuận', REJECTED: 'Từ chối' }[e.decision] || e.decision) + '</b>' + (e.decision_note ? ': ' + esc(e.decision_note) : '') + '</div>'; }).join('') : '<div class="muted">Không có.</div>') + '</div>';
+    $app.innerHTML = h;
+  }).catch(fail);
+};
+ACT.personGo = function () { var v = perVal(); location.hash = '#/nhan-su-ct/' + S.person.id + '/' + v[0] + '/' + v[1]; };
 
 // ================= HỒ SƠ SỰ CỐ (V1.2, bản tổng hợp Mục 7) =================
 var PH = { PHOTO_SCENE: 'Ảnh hiện trường', INCIDENT_BEFORE: 'Ảnh trước xử lý', INCIDENT_AFTER: 'Ảnh sau xử lý' };
