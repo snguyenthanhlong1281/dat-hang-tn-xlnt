@@ -146,9 +146,10 @@ function navItems() {
   var roles = {}; (m.roles || []).forEach(function (x) { roles[x] = 1; });
   var it = [];
   if (roles.WORKER || roles.TEAM_LEAD) it.push(['nhiem-vu', 'Nhiệm vụ của tôi']);
-  if (m.is_manager) { it.push(['sep', 'QUẢN LÝ TRẠM']); it.push(['dashboard', 'Dashboard Trạm']); it.push(['ke-hoach', 'Kế hoạch']); it.push(['giao-viec', 'Giao việc']); it.push(['lan-den-han', 'Lần đến hạn']); it.push(['nhan-su', 'Nhân sự']); }
-  if (a.QUALITY_CHECK) it.push(['xac-nhan', 'Chờ xác nhận']);
-  if (a.PLAN_APPROVE || a.ROUTE_EXCEPTION || a.OCC_DISPOSITION) it.push(['duyet', 'Chờ duyệt']);
+  if (m.is_manager) { it.push(['sep', 'QUẢN LÝ TRẠM']); it.push(['dashboard', 'Dashboard Trạm']); it.push(['ca-nhan', 'Dashboard cá nhân']); it.push(['ke-hoach', 'Kế hoạch']); it.push(['giao-viec', 'Giao việc']); it.push(['lan-den-han', 'Lần đến hạn']); it.push(['nhan-su', 'Nhân sự']); }
+  // V1.2.2 (CR-03): Quản trị xem được mọi hàng chờ; nút quyết định theo thẩm quyền
+  if (a.QUALITY_CHECK || m.is_admin) it.push(['xac-nhan', 'Chờ xác nhận']);
+  if (a.PLAN_APPROVE || a.ROUTE_EXCEPTION || a.OCC_DISPOSITION || m.is_admin) it.push(['duyet', 'Chờ duyệt']);
   it.push(['sep', 'CHUNG']); it.push(['su-co', 'Sự cố']); it.push(['thong-bao', 'Thông báo']);
   if (m.is_admin) it.push(['quan-tri', 'Quản trị']);
   return it;
@@ -162,7 +163,7 @@ function boot() {
   $('devbar').hidden = CFG.authMode !== 'DEV';
   var p = S.me ? Promise.resolve(S.me) : api('me');
   p.then(function (me) {
-    S.me = me; $('stationName').textContent = me.don_vi_name || 'Quản lý tài sản';
+    S.me = me; $('stationName').textContent = (me.in_station === false ? '' : me.don_vi_name) || (me.is_admin ? 'Quản trị' : 'Quản lý tài sản');
     $('nav').hidden = false; $('menuBtn').hidden = false; $('bellBtn').hidden = false;
     if (window.innerWidth <= 800) $('nav').classList.add('closed');
     return api('lists.get');
@@ -229,28 +230,64 @@ ROUTES['nhiem-vu'] = function () {
   api('my-tasks').then(function (list) {
     S.tasks = list;
     var errQ = Q.filter(function (q) { return q.status === 'ERROR'; });
-    var h = '<h1>Nhiệm vụ của tôi</h1>';
-    if (errQ.length) h += '<div class="card bl-red"><h3>Thao tác bị máy chủ từ chối</h3>' + errQ.map(function (q) { return '<div class="small">' + esc(q.label) + ': ' + esc(q.error) + ' <button class="btn sm danger" data-act="dropQ" data-key="' + q.key + '">Bỏ thao tác</button></div>'; }).join('') + '</div>';
-    if (!list.length) h += '<div class="card">Chưa có nhiệm vụ được công bố. Kế hoạch ngày tiếp theo được công bố từ 20 giờ.</div>';
-    list.forEach(function (a) {
-      h += '<div class="card"><div class="row" style="justify-content:space-between"><div><h2>' + esc(a.route_name) + '</h2><div class="sub">Ngày ' + dmy(a.work_date) + ' · Hạn ' + esc(String(a.due_at).slice(11, 16)) + ' · ' + esc(a.assignment_code) + '</div>' +
-        (a.reason ? '<div class="small">Lý do giao: ' + esc(a.reason) + '</div>' : '') + '</div>' + chip(AS[a.status] || a.status, a.status === 'COMPLETED' ? 'green' : 'blue') + '</div>' +
-        '<div class="grid kpis" style="margin:10px 0"><div class="kpi"><div class="v">' + a.total + '</div><div class="l">phải làm</div></div><div class="kpi"><div class="v" style="color:var(--amber)">' + a.submitted + '</div><div class="l">đã báo hoàn thành</div></div>' +
-        '<div class="kpi"><div class="v" style="color:var(--green)">' + a.verified + '</div><div class="l">đã xác nhận đạt</div></div><div class="kpi"><div class="v">' + a.remaining + '</div><div class="l">còn lại</div></div></div>' +
-        (!a.accepted ? '<button class="btn big" data-act="accept" data-id="' + a.assignment_id + '">TIẾP NHẬN NHIỆM VỤ</button><div style="height:10px"></div>' : '');
-      var pts = a.points.slice().sort(function (x, y) { return (x.point_status === 'RETURNED' ? 0 : 1) - (y.point_status === 'RETURNED' ? 0 : 1) || x.seq_no - y.seq_no; });
-      pts.forEach(function (p) {
-        var ls = localStatus(p);
-        h += '<button class="point bl-' + ls[1] + '" data-act="openPoint" data-a="' + a.assignment_id + '" data-p="' + p.assignment_point_id + '"' + (p.point_status === 'LOCKED' ? ' style="opacity:.75"' : '') + '>' +
-          '<div class="num c-' + ls[1] + '">' + p.seq_no + '</div><div style="flex:1;min-width:0"><b>' + esc(p.asset_code) + '</b> · ' + esc(p.asset_name) + '<div class="small muted">' + esc(p.location_text || '') + '</div>' +
-          '<div class="small">' + p.items.map(function (i) { return esc(i.work_name); }).join(' · ') + '</div>' + chip(ls[0], ls[1]) +
-          (p.items.some(function (i) { return i.return_comment; }) && p.point_status === 'RETURNED' ? '<div class="small err">Trả lại: ' + esc(p.items.filter(function (i) { return i.return_comment; })[0].return_comment) + '</div>' : '') + '</div></button>';
-      });
-      h += '</div>';
-    });
-    h += '<button class="btn big warn" data-act="newIncident">GHI NHẬN SỰ CỐ</button>';
-    $app.innerHTML = h;
+    var h = errQ.length ? '<div class="card bl-red"><h3>Thao tác bị máy chủ từ chối</h3>' + errQ.map(function (q) { return '<div class="small">' + esc(q.label) + ': ' + esc(q.error) + ' <button class="btn sm danger" data-act="dropQ" data-key="' + q.key + '">Bỏ thao tác</button></div>'; }).join('') + '</div>' : '';
+    $app.innerHTML = h + personalView(list, { name: S.me.full_name, date: today(), readOnly: false });
   }).catch(function (e) { if (e.network && S.tasks) { toast('Mất kết nối: đang hiển thị dữ liệu đã tải.', 'info'); } else fail(e); });
+};
+// V1.2.2 (CR-03): Dashboard cá nhân theo hình minh họa – dùng chung cho người lao động và chế độ xem của Quản trị
+function personalView(list, o) {
+  var sum = function (k) { return list.reduce(function (t, a) { return t + (Number(a[k]) || 0); }, 0); };
+  var cur = null;
+  list.forEach(function (a) { a.points.slice().sort(function (x, y) { return x.seq_no - y.seq_no; }).forEach(function (p) {
+    if (!cur && ['READY', 'STARTED', 'RETURNED'].indexOf(p.point_status) >= 0) cur = { a: a.assignment_id, p: p.assignment_point_id, asset: p.asset_id };
+  }); });
+  var h = '<div class="sub" style="font-weight:600;letter-spacing:.06em">ĐẶT HÀNG TN-XLNT</div><h1>DASHBOARD CÁ NHÂN</h1>' +
+    '<div>Người thực hiện: <b>' + esc(o.name) + '</b> · Ngày: ' + dmy(o.date) + '</div>' +
+    (o.readOnly ? '<div class="banner c-blue" style="margin-top:8px">Chế độ xem của người quản lý: chỉ hiển thị, không thao tác thay người thực hiện.</div>' : '') +
+    '<div class="grid kpis5" style="margin:12px 0">' +
+    '<div class="card kpi" style="margin:0"><div class="l">TUYẾN ĐƯỢC GIAO</div><div class="v sm">' + (list.length ? list.map(function (a) { return esc(a.route_name); }).join('<br>') : '–') + '</div></div>' +
+    [['ĐIỂM PHẢI LÀM', sum('total'), ''], ['ĐÃ HOÀN THÀNH', sum('verified'), 'var(--green)'], ['CÒN LẠI', sum('remaining'), '']].map(function (x) {
+      return '<div class="card kpi" style="margin:0"><div class="l">' + x[0] + '</div><div class="v"' + (x[2] ? ' style="color:' + x[2] + '"' : '') + '>' + x[1] + '</div></div>'; }).join('') + '</div>';
+  h += '<h2>DANH SÁCH ĐIỂM THEO THỨ TỰ TUYẾN</h2>';
+  if (!list.length) h += '<div class="card">Chưa có nhiệm vụ được công bố. Kế hoạch ngày tiếp theo được công bố từ 20 giờ.</div>';
+  list.forEach(function (a) {
+    h += '<div class="card"><div class="row" style="justify-content:space-between"><div><b>' + esc(a.route_name) + '</b><div class="sub">Ngày ' + dmy(a.work_date) + ' · Hạn ' + esc(String(a.due_at).slice(11, 16)) + ' · ' + esc(a.assignment_code) + ' · đã báo hoàn thành ' + a.submitted + '/' + a.total + '</div>' +
+      (a.reason ? '<div class="small">Lý do giao: ' + esc(a.reason) + '</div>' : '') + '</div>' + chip(AS[a.status] || a.status, a.status === 'COMPLETED' ? 'green' : 'blue') + '</div>' +
+      (!a.accepted && !o.readOnly ? '<div style="height:8px"></div><button class="btn big" data-act="accept" data-id="' + a.assignment_id + '">TIẾP NHẬN NHIỆM VỤ</button>' : '') + '<div style="height:8px"></div>';
+    a.points.slice().sort(function (x, y) { return x.seq_no - y.seq_no; }).forEach(function (p) {
+      var ls = o.readOnly ? (PT[p.point_status] || [p.point_status, 'grey']) : localStatus(p);
+      var act = !o.readOnly && ['READY', 'STARTED', 'RETURNED'].indexOf(p.point_status) >= 0;
+      var inner = '<div class="num c-' + ls[1] + '">' + (p.seq_no < 10 ? '0' : '') + p.seq_no + '</div><div style="flex:1;min-width:0"><b>' + esc(p.asset_code) + '</b> · ' + esc(p.asset_name) + '<div class="small muted">' + esc(p.location_text || '') + '</div>' +
+        '<div class="small">' + p.items.map(function (i) { return esc(i.work_name); }).join(' · ') + '</div>' + chip(ls[0], ls[1]) +
+        (p.items.some(function (i) { return i.return_comment; }) && p.point_status === 'RETURNED' ? '<div class="small err">Trả lại: ' + esc(p.items.filter(function (i) { return i.return_comment; })[0].return_comment) + '</div>' : '') + '</div>' +
+        (act ? '<span class="small" style="color:var(--blue);font-weight:600">' + (p.point_status === 'READY' ? 'BẮT ĐẦU' : 'TIẾP TỤC') + '</span>' : '');
+      h += o.readOnly ? '<div class="point bl-' + ls[1] + '">' + inner + '</div>'
+        : '<button class="point bl-' + ls[1] + '" data-act="openPoint" data-a="' + a.assignment_id + '" data-p="' + p.assignment_point_id + '"' + (p.point_status === 'LOCKED' ? ' style="opacity:.75"' : '') + '>' + inner + '</button>';
+    });
+    h += '</div>';
+  });
+  if (!o.readOnly) h += '<h2>THAO TÁC</h2><div class="grid acts3">' +
+    '<button class="btn big" data-act="curPoint"' + (cur ? ' data-a="' + cur.a + '" data-p="' + cur.p + '"' : ' disabled') + '>BẮT ĐẦU / HOÀN THÀNH</button>' +
+    '<button class="btn big warn" data-act="newIncident"' + (cur ? ' data-asset="' + cur.asset + '" data-p="' + cur.p + '"' : '') + '>GHI NHẬN SỰ CỐ</button>' +
+    '<button class="btn big sec" data-act="exception"' + (cur ? ' data-a="' + cur.a + '" data-p="' + cur.p + '"' : ' disabled') + '>ĐỀ NGHỊ NGOẠI LỆ</button></div>';
+  h += '<p class="small muted">Chỉ xem nhiệm vụ được giao; hoàn thành chính thức sau khi được xác nhận đạt.</p>';
+  return h;
+}
+ACT.curPoint = function (d) { if (d.a) location.hash = '#/diem/' + d.a + '/' + d.p; };
+// Quản trị, người quản lý: chọn người để xem Dashboard cá nhân
+ROUTES['ca-nhan'] = function (args) {
+  if (args[0]) {
+    api('tasks.of', { user_id: args[0] }).then(function (r) {
+      $app.innerHTML = '<a href="#/ca-nhan">← Chọn người</a> · <a href="#/nhan-su-ct/' + r.person.user_id + '">Hồ sơ tác nghiệp</a><div style="height:6px"></div>' +
+        personalView(r.tasks, { name: r.person.full_name + ' (' + r.person.employee_code + ')', date: r.date, readOnly: true });
+    }).catch(fail);
+    return;
+  }
+  api('people.list', {}).then(function (r) {
+    $app.innerHTML = '<h1>Dashboard cá nhân</h1><div class="sub">' + esc(S.me.don_vi_name) + ' · chọn người để xem màn hình Nhiệm vụ của tôi của người đó (chỉ xem)</div><div style="height:8px"></div>' +
+      (r.people.length ? r.people.map(function (u) { return '<a class="point" href="#/ca-nhan/' + u.user_id + '"><div style="flex:1"><b>' + esc(u.full_name) + '</b> · ' + esc(u.employee_code) + '<div class="small muted">' + esc(u.team_name || '') + ' · ' + esc((u.roles || []).join(', ')) + '</div></div><span class="small">Nhiệm vụ trong kỳ: ' + u.assignments + '</span></a>'; }).join('')
+        : '<div class="card muted">Trạm chưa có người dùng. Nhập dữ liệu nền tại mục Quản trị.</div>');
+  }).catch(fail);
 };
 ACT.dropQ = function (d) { Q = Q.filter(function (q) { return q.key !== d.key; }); saveQ(); route(); };
 ACT.accept = function (d, el) { busy(el, true); api('assignments.accept', { assignment_id: d.id }).then(function () { toast('Đã tiếp nhận nhiệm vụ.', 'ok'); route(); }).catch(function (e) { busy(el, false); fail(e); }); };
@@ -461,7 +498,7 @@ ROUTES['nhan-su-ct'] = function (args) {
   api('people.get', { user_id: id, period: per, ref: ref }).then(function (r) {
     var u = r.person, k = r.summary;
     S.person = { id: id };
-    var h = '<a href="#/nhan-su/' + per + '/' + ref + '">← Nhân sự</a><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="sub">' + esc(u.employee_code) + ' · ' + esc(u.team_name) + ' · ' + esc(u.roles.join(', ')) + '</div><h1>' + esc(u.full_name) + '</h1><div class="small muted">' + esc(u.email) + (u.account_status !== 'ACTIVE' ? ' · Đã khóa' : '') + ' · ' + esc(r.period.label) + '</div></div>' + periodPicker(per, ref, 'personGo') + '</div>' +
+    var h = '<a href="#/nhan-su/' + per + '/' + ref + '">← Nhân sự</a> · <a href="#/ca-nhan/' + id + '">Xem Dashboard cá nhân</a><div class="row" style="justify-content:space-between;align-items:flex-end;margin-top:8px"><div><div class="sub">' + esc(u.employee_code) + ' · ' + esc(u.team_name) + ' · ' + esc(u.roles.join(', ')) + '</div><h1>' + esc(u.full_name) + '</h1><div class="small muted">' + esc(u.email) + (u.account_status !== 'ACTIVE' ? ' · Đã khóa' : '') + ' · ' + esc(r.period.label) + '</div></div>' + periodPicker(per, ref, 'personGo') + '</div>' +
       '<div class="grid kpis" style="margin:10px 0">' + [['Nhiệm vụ được giao', k.assignments, ''], ['Kết quả đã báo', k.submitted, ''], ['Đạt', k.passed, 'var(--green)'], ['Chờ xác nhận', k.waiting, 'var(--amber)'], ['Bị trả lại', k.returned, 'var(--red)'], ['Sự cố', k.incidents, '#7C2D12'], ['Đề nghị ngoại lệ', k.exceptions, '']]
         .map(function (x) { return '<div class="card kpi" style="margin:0"><div class="l">' + x[0] + '</div><div class="v"' + (x[2] ? ' style="color:' + x[2] + '"' : '') + '>' + x[1] + '</div></div>'; }).join('') + '</div>';
     h += '<div class="card"><h2>Nhiệm vụ được giao</h2>' + (r.assignments.length ? '<div class="tbl"><table><thead><tr><th>Ngày</th><th>Mã</th><th>Tuyến / công việc</th><th>Loại</th><th>Tiếp nhận</th><th>Tiến độ</th><th>Trạng thái</th></tr></thead><tbody>' +
@@ -514,7 +551,8 @@ ACT.incAct = function (d, el) { busy(el, true); api('incidents.act', { incident_
 ROUTES['xac-nhan'] = function () {
   api('quality-checks.pending').then(function (list) {
     var groups = {}; list.forEach(function (r) { (groups[r.assignment_point_id] = groups[r.assignment_point_id] || []).push(r); });
-    var h = '<h1>Chờ xác nhận</h1><p class="sub">Đối chiếu tiêu chuẩn, ảnh, thời gian và vị trí. Không xác nhận đạt chỉ vì có ảnh hoặc GPS.</p>';
+    var canQ = (S.me.authority || []).indexOf('QUALITY_CHECK') >= 0;
+    var h = '<h1>Chờ xác nhận</h1><p class="sub">Đối chiếu tiêu chuẩn, ảnh, thời gian và vị trí. Không xác nhận đạt chỉ vì có ảnh hoặc GPS.</p>' + (canQ ? '' : VIEWONLY);
     if (!list.length) h += '<div class="card">Không có kết quả chờ xác nhận.</div>';
     Object.keys(groups).forEach(function (pid) {
       var rs = groups[pid], r0 = rs[0];
@@ -524,10 +562,10 @@ ROUTES['xac-nhan'] = function () {
         '<div class="photos" style="margin:8px 0"><div><div class="small">Ảnh trước</div><img id="pb' + pid + '" class="photo" alt="Ảnh trước"></div><div><div class="small">Ảnh sau</div><img id="pa' + pid + '" class="photo" alt="Ảnh sau"></div></div>' +
         '<div><b>Nội dung:</b> ' + esc(r0.note) + '</div>' +
         rs.map(function (r) { return '<div class="check"><div style="flex:1"><b>' + esc(r.work_name) + '</b> ' + chip(SRC[r.source_type] || '', 'blue') + (r.is_rework ? ' ' + chip('Làm lại', 'amber') : '') + '<div class="small">Tiêu chuẩn: ' + esc(r.standard) + '</div></div>' +
-          '<button class="btn sm ok" data-act="qc" data-ids="' + r.work_result_id + '" data-d="PASSED">Đạt</button></div>'; }).join('') +
+          (canQ ? '<button class="btn sm ok" data-act="qc" data-ids="' + r.work_result_id + '" data-d="PASSED">Đạt</button>' : '') + '</div>'; }).join('') + (!canQ ? '</div>' :
         '<div class="field" style="margin-top:8px"><label for="qc' + pid + '">Lý do trả lại</label><input id="qc' + pid + '"></div><div class="row">' +
         '<button class="btn ok" data-act="qc" data-ids="' + rs.map(function (r) { return r.work_result_id; }).join(',') + '" data-d="PASSED">Xác nhận đạt cả điểm</button>' +
-        '<button class="btn danger" data-act="qc" data-ids="' + rs.map(function (r) { return r.work_result_id; }).join(',') + '" data-d="RETURNED" data-pid="' + pid + '">Trả lại</button></div></div>';
+        '<button class="btn danger" data-act="qc" data-ids="' + rs.map(function (r) { return r.work_result_id; }).join(',') + '" data-d="RETURNED" data-pid="' + pid + '">Trả lại</button></div></div>');
     });
     $app.innerHTML = h;
     Object.keys(groups).forEach(function (pid) { loadPhoto(groups[pid][0].photo_before_id, 'pb' + pid); loadPhoto(groups[pid][0].photo_after_id, 'pa' + pid); });
@@ -541,20 +579,21 @@ ACT.qc = function (d, el) {
 };
 
 // ================= CHỜ DUYỆT =================
+var VIEWONLY = '<div style="margin-top:6px">' + chip('Chỉ xem – loại quyết định đã giao cho người có thẩm quyền', 'grey') + '</div>';
 ROUTES['duyet'] = function () {
   api('approvals.pending').then(function (r) {
     var h = '<h1>Chờ duyệt</h1>';
-    h += '<h2>Kế hoạch</h2>' + (r.plans.length ? r.plans.map(function (p) { return '<div class="card"><b>' + esc(p.plan_code) + '</b> · ' + dmy(p.period_from) + ' – ' + dmy(p.period_to) + ' · ' + esc(p.creator) + (p.self ? ' ' + chip('Do anh/chị lập – không tự duyệt', 'grey') : '') + ' <a class="btn sm sec" href="#/ke-hoach/' + p.plan_id + '">Xem và duyệt</a></div>'; }).join('') : '<div class="card muted">Không có.</div>');
+    h += '<h2>Kế hoạch</h2>' + (r.plans.length ? r.plans.map(function (p) { return '<div class="card"><b>' + esc(p.plan_code) + '</b> · ' + dmy(p.period_from) + ' – ' + dmy(p.period_to) + ' · ' + esc(p.creator) + (p.self ? ' ' + chip('Do anh/chị lập – không tự duyệt', 'grey') : '') + ' <a class="btn sm sec" href="#/ke-hoach/' + p.plan_id + '">' + (r.can && r.can.plans ? 'Xem và duyệt' : 'Xem') + '</a></div>'; }).join('') : '<div class="card muted">Không có.</div>');
     h += '<h2>Ngoại lệ tuyến</h2>' + (r.exceptions.length ? r.exceptions.map(function (e) {
       return '<div class="card bl-amber"><b>' + esc(e.asset_code) + ' · điểm ' + esc(e.seq_no) + '</b> · ' + (e.scope === 'POINT' ? (e.request_type === 'REORDER' ? 'Đổi thứ tự' : 'Bỏ qua điểm') : 'Không làm hạng mục ' + esc(e.work_name)) +
         '<div class="small">Lý do: ' + esc(reasonLabel(e.reason_code)) + ' · ' + esc(e.description) + '</div><div class="small muted">' + esc(e.requester) + ' · ' + vnTime(e.requested_at) + '</div>' +
         (e.attachment_id ? '<img id="ea' + e.exception_id + '" class="photo" alt="Ảnh hiện trường">' : '') +
-        (e.self ? chip('Do anh/chị đề nghị – không tự duyệt', 'grey') : '<div class="field" style="margin-top:6px"><label for="en' + e.exception_id + '">Nội dung quyết định</label><input id="en' + e.exception_id + '"></div><div class="row"><button class="btn sm ok" data-act="exDecide" data-id="' + e.exception_id + '" data-d="APPROVED">Chấp thuận</button><button class="btn sm danger" data-act="exDecide" data-id="' + e.exception_id + '" data-d="REJECTED">Từ chối</button></div>') +
+        (e.self ? chip('Do anh/chị đề nghị – không tự duyệt', 'grey') : !(r.can && r.can.exceptions) ? VIEWONLY : '<div class="field" style="margin-top:6px"><label for="en' + e.exception_id + '">Nội dung quyết định</label><input id="en' + e.exception_id + '"></div><div class="row"><button class="btn sm ok" data-act="exDecide" data-id="' + e.exception_id + '" data-d="APPROVED">Chấp thuận</button><button class="btn sm danger" data-act="exDecide" data-id="' + e.exception_id + '" data-d="REJECTED">Từ chối</button></div>') +
         '<p class="small muted">Chấp thuận không tự tính lần đến hạn là hoàn thành. Cần miễn hoặc dời: vào Lần đến hạn.</p></div>';
     }).join('') : '<div class="card muted">Không có.</div>');
     h += '<h2>Dời, miễn lần đến hạn</h2>' + (r.dispositions.length ? r.dispositions.map(function (x) {
       return '<div class="card"><b>' + esc(x.occurrence_code) + '</b> · ' + (x.disposition_type === 'WAIVED' ? 'Miễn thực hiện' : 'Dời đến ' + dmy(x.new_planned_date)) + '<div class="small">Lý do: ' + esc(x.reason) + (x.reference_document ? ' · Căn cứ: ' + esc(x.reference_document) : '') + '</div><div class="small muted">' + esc(x.requester) + '</div>' +
-        (x.self ? chip('Do anh/chị đề nghị – không tự duyệt', 'grey') + ' <button class="btn sm sec" data-act="dsWithdraw" data-id="' + x.disposition_id + '">Rút đề nghị</button>' : '<div class="field" style="margin-top:6px"><label for="dn' + x.disposition_id + '">Ý kiến</label><input id="dn' + x.disposition_id + '"></div><div class="row"><button class="btn sm ok" data-act="dsDecide" data-id="' + x.disposition_id + '" data-d="APPROVED">Duyệt</button><button class="btn sm danger" data-act="dsDecide" data-id="' + x.disposition_id + '" data-d="REJECTED">Từ chối</button></div>') + '</div>';
+        (x.self ? chip('Do anh/chị đề nghị – không tự duyệt', 'grey') + ' <button class="btn sm sec" data-act="dsWithdraw" data-id="' + x.disposition_id + '">Rút đề nghị</button>' : !(r.can && r.can.dispositions) ? VIEWONLY : '<div class="field" style="margin-top:6px"><label for="dn' + x.disposition_id + '">Ý kiến</label><input id="dn' + x.disposition_id + '"></div><div class="row"><button class="btn sm ok" data-act="dsDecide" data-id="' + x.disposition_id + '" data-d="APPROVED">Duyệt</button><button class="btn sm danger" data-act="dsDecide" data-id="' + x.disposition_id + '" data-d="REJECTED">Từ chối</button></div>') + '</div>';
     }).join('') : '<div class="card muted">Không có.</div>');
     $app.innerHTML = h;
     r.exceptions.forEach(function (e) { if (e.attachment_id) loadPhoto(e.attachment_id, 'ea' + e.exception_id); });
@@ -567,34 +606,36 @@ ACT.dsWithdraw = function (d, el) { busy(el, true); api('dispositions.withdraw',
 
 // ================= DASHBOARD =================
 ROUTES['dashboard'] = function (args) {
-  var per = args[0] || 'month', ref = args[1] || today().slice(0, 7);
-  api('dashboard.station', { period: per, ref: ref }).then(function (d) {
+  var per = args[0] || 'month', ref = args[1] || today().slice(0, 7), nhom = args[2] && args[2] !== '-' ? args[2] : '', cum = args[3] || '';
+  api('dashboard.station', { period: per, ref: ref, nhom: nhom, cum_id: cum }).then(function (d) {
     S.dash = { per: per, ref: ref };
     var k = d.kpi;
-    var h = '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><div class="sub" style="font-weight:600;letter-spacing:.06em">ĐẶT HÀNG TN-XLNT</div><h1>QUẢN LÝ TÀI SẢN</h1><div>' + esc(d.station) + ' · ' + esc(d.period.label) + '</div></div>' +
-      periodPicker(per, ref, 'dashGo') + '</div>' +
-      '<p class="small muted">Tính theo ngày đến hạn. Cập nhật lúc ' + vnTime(d.generated_at) + '. Kỳ đã qua: số đã hoàn thành có thể tăng do xác nhận sau kỳ.</p>' + legend() +
-      '<div class="grid kpis" style="margin:10px 0">' + [['Tổng số tài sản', k.assets, ''], ['Phải thực hiện', k.due, 'lần đã đến hạn'], ['Đã hoàn thành', k.done, 'đã xác nhận đạt', 'var(--green)'], ['Chưa hoàn thành', k.notDone, 'quá hạn ' + k.overdue, 'var(--red)'],
-        ['Chưa đến kỳ', k.notYet, 'không tính chưa hoàn thành'], ['Loại trừ theo quyết định', k.excluded, 'miễn đã duyệt'], ['Sự cố', k.incOpen + ' chưa xử lý', k.incPeriod + ' phát sinh trong kỳ', '#7C2D12'], ['Bổ sung / phát sinh', k.bosung + ' / ' + k.phatsinh, 'thống kê riêng']]
+    // V1.2.2 (CR-03): bố cục theo hình minh họa và MD-04 Mục 4 – dải 5 chỉ số phụ trợ, 4 cột cố định
+    var h = '<div class="row" style="justify-content:space-between;align-items:flex-end"><div><div class="sub" style="font-weight:600;letter-spacing:.06em">ĐẶT HÀNG TN-XLNT</div><h1>DASHBOARD ĐƠN VỊ / TRẠM</h1>' +
+      '<div>Trạm: <b>' + esc(d.station || 'chưa có dữ liệu Trạm') + '</b> · Kỳ theo dõi: ' + esc(d.period.label) + '</div></div>' + periodPicker(per, ref, 'dashGo') + '</div>' +
+      '<div class="row" style="margin-top:6px"><select id="dNhom" aria-label="Nhóm quản lý" style="width:auto"><option value="">Tất cả nhóm</option><option value="I"' + (nhom === 'I' ? ' selected' : '') + '>Nhóm I – Thoát nước thải</option><option value="II"' + (nhom === 'II' ? ' selected' : '') + '>Nhóm II – Thoát nước đô thị</option></select>' +
+      '<select id="dCum" aria-label="Cụm tài sản" style="width:auto"><option value="">Tất cả cụm</option>' + (d.cum_options || []).map(function (c) { return '<option value="' + c.cum_id + '"' + (cum === c.cum_id ? ' selected' : '') + '>Nhóm ' + esc(c.nhom_code) + ' · ' + esc(c.name) + '</option>'; }).join('') + '</select></div>' +
+      '<div class="grid kpis5" style="margin:12px 0 6px">' + [['TỔNG TÀI SẢN', k.assets, ''], ['LẦN PHẢI LÀM', k.due, 'đã đến hạn trong kỳ'], ['ĐÃ ĐẠT', k.done, 'đã xác nhận đạt', 'var(--green)'], ['CHƯA ĐẠT', k.notDone, 'quá hạn ' + k.overdue, 'var(--red)'], ['SỰ CỐ', k.incOpen, 'chưa xử lý · ' + k.incPeriod + ' phát sinh trong kỳ', '#7C2D12']]
         .map(function (x) { return '<div class="card kpi" style="margin:0"><div class="l">' + x[0] + '</div><div class="v"' + (x[3] ? ' style="color:' + x[3] + '"' : '') + '>' + esc(x[1]) + '</div><div class="small muted">' + esc(x[2]) + '</div></div>'; }).join('') + '</div>' +
+      '<p class="small muted" style="margin:0 0 6px">Chưa đến kỳ ' + k.notYet + ' (không tính chưa đạt) · Loại trừ theo quyết định ' + k.excluded + ' · Bổ sung ' + k.bosung + ' · Phát sinh ' + k.phatsinh + ' (thống kê riêng) · Cập nhật ' + vnTime(d.generated_at) + '</p>' + legend() +
       '<div class="grid cols4">' + d.columns.map(function (c) {
-        var cls = c.empty ? 'off' : c.nhom_code === 'I' ? 'n1' : 'n2';
-        var head = '<div class="colhead ' + cls + '"><div class="small" style="font-weight:700;letter-spacing:.06em">NHÓM ' + c.nhom_code + (c.nhom_code === 'I' ? ' · THOÁT NƯỚC THẢI' : ' · THOÁT NƯỚC ĐÔ THỊ') + '</div><b>' + (c.kind === 'CUM' ? 'Cụm tài sản' : 'Hạng mục công việc') + '</b></div>';
-        if (c.empty) return '<div class="col">' + head + '<div class="card c-grey">Trạm không quản lý tài sản thuộc Nhóm ' + c.nhom_code + '</div></div>';
+        var head = '<div class="colhead ' + (c.nhom_code === 'I' ? 'n1' : 'n2') + '"><div class="small" style="font-weight:700;letter-spacing:.06em">NHÓM ' + c.nhom_code + '</div><b>' + (c.kind === 'CUM' ? 'CỤM TÀI SẢN' : 'HẠNG MỤC CÔNG VIỆC') + '</b></div>';
+        if (c.empty) return '<div class="col">' + head + '<div class="card c-grey small">' + (c.empty_reason === 'FILTERED' ? 'Không thuộc phạm vi lọc.' : c.empty_reason === 'NOT_MANAGED' ? 'Trạm không quản lý tài sản Nhóm ' + c.nhom_code + '.' :
+          (c.kind === 'CUM' ? 'Chưa có cụm tài sản' : 'Chưa có hạng mục công việc') + ' Nhóm ' + c.nhom_code + '. Nhập dữ liệu nền tại mục Quản trị.') + '</div></div>';
         return '<div class="col">' + head + c.cards.map(function (x) {
           if (c.kind === 'CUM') return '<button class="dcard bl-' + x.color + '" data-act="drill" data-cum="' + x.cum_id + '" data-name="' + esc(x.name) + '"><div class="row" style="justify-content:space-between"><b>' + esc(x.name) + '</b>' + chip(COLOR[x.color], x.color) + '</div>' +
-            '<div class="nums"><div><b>' + x.assets + '</b><span>tài sản</span></div><div><b>' + x.incOpen + '</b><span>sự cố chưa xử lý</span></div><div><b>' + x.incPeriod + '</b><span>sự cố trong kỳ</span></div></div></button>';
+            '<div class="nums"><div><b>' + x.assets + '</b><span>tài sản</span></div><div><b style="color:#7C2D12">' + x.incOpen + '</b><span>sự cố chưa xử lý</span></div><div><b>' + x.incPeriod + '</b><span>sự cố trong kỳ</span></div></div></button>';
           var st = x.stat, pct = st.due ? Math.round(st.done * 100 / st.due) : 0;
           return '<button class="dcard bl-' + x.color + '" data-act="drill" data-work="' + x.work_id + '" data-name="' + esc(x.name) + '"><div class="row" style="justify-content:space-between"><b>' + esc(x.name) + '</b>' + chip(COLOR[x.color], x.color) + '</div>' +
-            '<div class="nums"><div><b style="color:var(--green)">' + st.done + '/' + st.due + '</b><span>đã hoàn thành</span></div><div><b style="color:var(--red)">' + st.notDone + '</b><span>chưa hoàn thành</span></div><div><b style="color:#7C2D12">' + x.inc + '</b><span>sự cố phát sinh</span></div></div>' +
+            '<div class="nums"><div><b style="color:var(--green)">' + st.done + '/' + st.due + '</b><span>đạt</span></div><div><b style="color:var(--red)">' + st.notDone + '</b><span>chưa đạt</span></div><div><b style="color:#7C2D12">' + x.inc + '</b><span>sự cố</span></div></div>' +
             '<div class="bar"><div style="width:' + pct + '%;background:' + (x.color === 'red' ? '#C0392B' : x.color === 'green' ? '#1E7B45' : x.color === 'amber' ? '#C98A00' : '#1D4ED8') + '"></div></div>' +
             '<div class="small muted">Chưa đến kỳ ' + st.notYet + ' · Bổ sung ' + x.bosung + ' · Phát sinh ' + x.phatsinh + (x.excluded ? ' · Loại trừ ' + x.excluded : '') + '</div></button>';
         }).join('') + '</div>';
-      }).join('') + '</div>';
+      }).join('') + '</div><p class="small muted">Bấm cụm / hạng mục để xem tài sản và từng lần thực hiện.</p>';
     $app.innerHTML = h;
   }).catch(fail);
 };
-ACT.dashGo = function () { var v = perVal(); location.hash = '#/dashboard/' + v[0] + '/' + v[1]; };
+ACT.dashGo = function () { var v = perVal(), n = val('dNhom'), c = val('dCum'); location.hash = '#/dashboard/' + v[0] + '/' + v[1] + (n || c ? '/' + (n || '-') + (c ? '/' + c : '') : ''); };
 ACT.perChange = function () { var r = $('dRef'); if (r) r.hidden = val('dPer') === 'all'; };
 // V1.2: bấm cụm → tài sản thuộc cụm; bấm hạng mục → tài sản áp dụng hạng mục
 ACT.drill = function (d) { location.hash = '#/ds-tai-san/' + S.dash.per + '/' + S.dash.ref + '/' + (d.cum ? 'cum/' + d.cum : 'work/' + d.work); };
